@@ -1,65 +1,27 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import Groq from "groq-sdk";
 import { SYSTEM_PROMPT, buildUserPrompt } from "../prompts/extractionPrompt";
 import { AiRecordSchema, AiRecord } from "./validator";
 
-let ai: GoogleGenAI | null = null;
+let client: Groq | null = null;
 
-function getClient(): GoogleGenAI {
-  if (!ai) {
-    ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+function getClient(): Groq {
+  if (!client) {
+    client = new Groq({ apiKey: process.env.GROQ_API_KEY });
   }
-  return ai;
+  return client;
 }
-// The JSON schema Gemini must conform to. Guarantees valid, parseable JSON back.
-const responseSchema = {
-  type: Type.OBJECT,
-  properties: {
-    records: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          created_at: { type: Type.STRING },
-          name: { type: Type.STRING },
-          email: { type: Type.STRING },
-          country_code: { type: Type.STRING },
-          mobile_without_country_code: { type: Type.STRING },
-          company: { type: Type.STRING },
-          city: { type: Type.STRING },
-          state: { type: Type.STRING },
-          country: { type: Type.STRING },
-          lead_owner: { type: Type.STRING },
-          crm_status: { type: Type.STRING },
-          crm_note: { type: Type.STRING },
-          data_source: { type: Type.STRING },
-          possession_time: { type: Type.STRING },
-          description: { type: Type.STRING },
-          skip: { type: Type.BOOLEAN },
-          skipReason: { type: Type.STRING },
-        },
-        required: [
-          "created_at", "name", "email", "country_code",
-          "mobile_without_country_code", "company", "city", "state",
-          "country", "lead_owner", "crm_status", "crm_note",
-          "data_source", "possession_time", "description", "skip", "skipReason",
-        ],
-      },
-    },
-  },
-  required: ["records"],
-};
 
-async function callGemini(rows: Record<string, string>[]): Promise<AiRecord[]> {
-    const response = await getClient().models.generateContent({    model: "gemini-3.5-flash",
-    contents: buildUserPrompt(rows),
-    config: {
-      systemInstruction: SYSTEM_PROMPT,
-      responseMimeType: "application/json",
-      responseSchema: responseSchema as any,
-    },
+async function callGroq(rows: Record<string, string>[]): Promise<AiRecord[]> {
+  const completion = await getClient().chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT + "\n\nRespond ONLY with a JSON object of the form: {\"records\": [...]}. No prose, no markdown fences." },
+      { role: "user", content: buildUserPrompt(rows) },
+    ],
+    response_format: { type: "json_object" },
   });
 
-  const raw = response.text;
+  const raw = completion.choices[0]?.message?.content;
   if (!raw) throw new Error("AI returned an empty response");
 
   const parsed = JSON.parse(raw);
@@ -67,14 +29,13 @@ async function callGemini(rows: Record<string, string>[]): Promise<AiRecord[]> {
   return records;
 }
 
-// Runs one batch through the AI, retrying once on any failure (network, parse, validation).
 export async function extractBatch(rows: Record<string, string>[]): Promise<AiRecord[]> {
   try {
-    return await callGemini(rows);
+    return await callGroq(rows);
   } catch (firstError) {
     console.warn("AI batch failed, retrying once:", (firstError as Error).message);
     try {
-      return await callGemini(rows);
+      return await callGroq(rows);
     } catch (secondError) {
       console.error("AI batch failed twice, skipping this batch:", (secondError as Error).message);
       return rows.map(() => AiRecordSchema.parse({
