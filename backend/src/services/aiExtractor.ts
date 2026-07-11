@@ -50,7 +50,7 @@ const responseSchema = {
 };
 
 async function callGemini(rows: Record<string, string>[]): Promise<AiRecord[]> {
-    const response = await getClient().models.generateContent({    model: "gemini-2.5-flash",
+    const response = await getClient().models.generateContent({    model: "gemini-3.5-flash",
     contents: buildUserPrompt(rows),
     config: {
       systemInstruction: SYSTEM_PROMPT,
